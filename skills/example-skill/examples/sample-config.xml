@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Example Configuration File -->
+<config>
+  <skill>example-skill</skill>
+  <version>1.0.0</version>
+  <settings>
+    <enabled>true</enabled>
+    <mode>template</mode>
+  </settings>
+</config>

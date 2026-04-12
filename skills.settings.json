@@ -1,0 +1,10 @@
+{
+  "directories": [
+    "~/.claude/skills",
+    "~/.cursor/skills",
+    "./skills"
+  ],
+  "reload": false,
+  "supporting_files": "template",
+  "main_file": "SKILL.md"
+}
