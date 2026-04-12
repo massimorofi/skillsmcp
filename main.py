@@ -40,20 +40,17 @@ class SkillsProviderServer:
         directories = self.config_loader.get_directories()
         reload_mode = self.config_loader.get_reload_mode()
         supporting_files = self.config_loader.get_supporting_files_mode()
-        main_file = self.config_loader.get_main_file()
         
         logger.info(f"Setting up SkillsDirectoryProvider")
         logger.info(f"  Directories: {[str(d) for d in directories]}")
         logger.info(f"  Reload mode: {reload_mode}")
         logger.info(f"  Supporting files mode: {supporting_files}")
-        logger.info(f"  Main file: {main_file}")
         
         # Create skills directory provider
         provider = SkillsDirectoryProvider(
             roots=directories,
             reload=reload_mode,
-            supporting_files=supporting_files,
-            main_file=main_file
+            supporting_files=supporting_files
         )
         
         self.mcp.add_provider(provider)

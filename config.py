@@ -12,7 +12,6 @@ class SkillsConfig(BaseModel):
     directories: List[str]
     reload: bool = False
     supporting_files: str = "template"  # "template" or "resources"
-    main_file: str = "SKILL.md"
     
     @field_validator('directories')
     @classmethod
@@ -67,10 +66,6 @@ class ConfigLoader:
         """Get supporting files mode"""
         return self.config.supporting_files
     
-    def get_main_file(self) -> str:
-        """Get main file name"""
-        return self.config.main_file
-    
     def reload(self):
         """Reload configuration from file"""
         self.config = self._load_config()
@@ -85,8 +80,7 @@ class ConfigLoader:
                 "./skills"
             ],
             "reload": False,
-            "supporting_files": "template",
-            "main_file": "SKILL.md"
+            "supporting_files": "template"
         }
         
         config_path = Path(config_file)

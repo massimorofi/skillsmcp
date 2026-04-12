@@ -5,6 +5,5 @@
     "./skills"
   ],
   "reload": false,
-  "supporting_files": "template",
-  "main_file": "SKILL.md"
+  "supporting_files": "template"
 }
