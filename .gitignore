@@ -41,6 +41,7 @@ Thumbs.db
 .server.pid
 server.log
 *.log
+.server-http.pid
 
 # Temporary
 *.tmp

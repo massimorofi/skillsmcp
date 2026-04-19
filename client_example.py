@@ -34,7 +34,7 @@ except ImportError:
     sys.exit(1)
 
 
-async def list_available_skills(server_url: str = "http://localhost:5000/mcp"):
+async def list_available_skills(server_url: str = "http://localhost:3001/mcp"):
     """List all available skills on the server"""
     print(f"Connecting to {server_url}...")
     

@@ -2,8 +2,23 @@
   "directories": [
     "~/.claude/skills",
     "~/.cursor/skills",
-    "./skills"
+    "./skills",
+    "/home/briggen/Dev/code/python/tmp/skills/skills",
+    "https://github.com/applied-artificial-intelligence/claude-code-toolkit.git"
   ],
   "reload": false,
-  "supporting_files": "template"
+  "supporting_files": "template",
+"http": {
+    "enabled": true,
+    "port": 3001,
+    "host": "0.0.0.0",
+    "path": "/mcp"
+  },
+  "gateway": {
+    "enabled": false,
+    "host": "localhost",
+    "port": 8000,
+    "name": "skills-provider",
+    "transport": "streamable-http"
+  }
 }

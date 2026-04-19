@@ -1,64 +1,103 @@
-"""FastMCP Skills Provider Server
-
-This MCP server exposes skills from configured directories as resources.
-Skills are directories containing a SKILL.md file and supporting materials.
-"""
+"""FastMCP Skills Provider Server"""
 
 import asyncio
-import json
 import logging
 import sys
+import threading
+import time
 from pathlib import Path
+from typing import Any, Dict, List
 
+import httpx
 from fastmcp import FastMCP
 from fastmcp.server.providers.skills import SkillsDirectoryProvider
 
-from config import ConfigLoader, SkillsConfig
+from config import ConfigLoader
 
-# Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
 class SkillsProviderServer:
     """FastMCP Skills Provider Server"""
-    
+
     def __init__(self, config_file: str = "skills.settings.json"):
-        """Initialize the skills provider server
-        
-        Args:
-            config_file: Path to configuration file
-        """
         self.config_loader = ConfigLoader(config_file)
         self.mcp = FastMCP("Skills Provider")
         self._setup_providers()
-    
+
     def _setup_providers(self):
-        """Setup skills providers from configuration"""
         directories = self.config_loader.get_directories()
         reload_mode = self.config_loader.get_reload_mode()
         supporting_files = self.config_loader.get_supporting_files_mode()
-        
+
         logger.info(f"Setting up SkillsDirectoryProvider")
         logger.info(f"  Directories: {[str(d) for d in directories]}")
         logger.info(f"  Reload mode: {reload_mode}")
         logger.info(f"  Supporting files mode: {supporting_files}")
-        
-        # Create skills directory provider
+
         provider = SkillsDirectoryProvider(
-            roots=directories,
-            reload=reload_mode,
-            supporting_files=supporting_files
+            roots=directories, reload=reload_mode, supporting_files=supporting_files
         )
-        
+
         self.mcp.add_provider(provider)
         logger.info("SkillsDirectoryProvider added successfully")
-    
+        self._setup_tools(provider)
+
+    def _setup_tools(self, provider):
+        @self.mcp.tool()
+        async def list_skills() -> List[Dict[str, str]]:
+            """List all available skills
+
+            Returns a list of all skills that are available in the configured directories.
+            """
+            resources = await provider.list_resources()
+            skills = {}
+            res_list = list(resources) if hasattr(resources, "__iter__") else []
+            for r in res_list:
+                uri = str(r.uri)
+                if uri.endswith("/SKILL.md"):
+                    skill_name = uri.split("skill://")[1].split("/")[0]
+                    skills[skill_name] = r.description or f"Skill: {skill_name}"
+            return [{"name": n, "description": d} for n, d in skills.items()]
+
+        @self.mcp.tool()
+        async def get_skill(skill_name: str) -> str:
+            """Get skill content by name"""
+            uri = f"skill://{skill_name}/SKILL.md"
+            try:
+                resource = await provider.get_resource(uri)
+                if hasattr(resource, "read"):
+                    content = await resource.read()
+                    return content if content else f"Skill {skill_name} not found"
+                return str(resource)
+            except Exception as e:
+                return f"Error: {str(e)}"
+
+        @self.mcp.tool()
+        async def list_skill_files(skill_name: str) -> List[str]:
+            """List all files in a skill
+
+            Returns all files associated with a specific skill.
+
+            Args:
+                skill_name: The name of the skill
+            """
+            resources = await provider.list_resources()
+            files = []
+            res_list = list(resources) if hasattr(resources, "__iter__") else []
+            for r in res_list:
+                uri = str(r.uri)
+                if uri.startswith(f"skill://{skill_name}/"):
+                    files.append(uri.split(f"skill://{skill_name}/")[1])
+            return files
+
+        logger.info("Skills tools added successfully")
+        logger.info(f"Registered tools: list_skills, get_skill, list_skill_files")
+
     def run(self):
-        """Run the MCP server"""
         logger.info("Starting FastMCP Skills Provider Server")
         try:
             self.mcp.run()
@@ -70,231 +109,91 @@ class SkillsProviderServer:
             sys.exit(1)
 
 
-def run_http_server(config_file: str, port: int):
-    """Run MCP server with HTTP transport (for MCP gateway)"""
-    try:
-        from fastapi import FastAPI, Request
-        from fastapi.responses import JSONResponse
-        import uvicorn
-    except ImportError:
-        logger.error("FastAPI required for HTTP mode. Install with: pip install fastapi uvicorn")
-        sys.exit(1)
-    
-    app = FastAPI(title="FastMCP Skills Provider")
+def run_http_server(config_file: str, port: int, gateway_url: str = None):
+    """Run MCP server with HTTP transport for gateway"""
     server_instance = SkillsProviderServer(config_file)
-    
-    @app.on_event("startup")
-    async def startup():
-        logger.info(f"HTTP Server starting on http://localhost:{port}")
-        logger.info("Connect your MCP gateway with transport: 'streamable-http' and url: 'http://localhost:{port}/mcp'")
-    
-    @app.post("/mcp")
-    async def mcp_endpoint(request: Request):
-        """MCP JSON-RPC endpoint for gateway communication"""
-        try:
-            data = await request.json()
-        except Exception as e:
-            logger.error(f"Failed to parse request: {e}")
-            return JSONResponse(
-                status_code=400,
-                content={"error": {"code": -32700, "message": "Parse error"}}
-            )
-        
-        # Handle JSON-RPC 2.0 requests
-        if not isinstance(data, dict) or data.get("jsonrpc") != "2.0":
-            return JSONResponse(
-                status_code=400,
-                content={"error": {"code": -32600, "message": "Invalid Request"}}
-            )
-        
-        method = data.get("method", "")
-        params = data.get("params", {})
-        request_id = data.get("id")
-        
-        logger.info(f"MCP Request: {method}")
-        
-        try:
-            # Handle different MCP methods
-            if method == "initialize":
-                result = {
-                    "protocolVersion": "2024-11-05",
-                    "capabilities": {
-                        "resources": {
-                            "listChanged": True,
-                            "subscribe": False
-                        }
-                    },
-                    "serverInfo": {
-                        "name": "Skills Provider",
-                        "version": "1.0.0"
-                    }
-                }
-            elif method == "resources/list":
-                result = await handle_resources_list(server_instance)
-            elif method == "resources/read":
-                result = await handle_resources_read(server_instance, params)
-            elif method == "tools/list":
-                result = {"tools": []}  # Skills provider doesn't expose tools
-            elif method == "prompts/list":
-                result = {"prompts": []}  # Skills provider doesn't expose prompts
-            else:
-                return JSONResponse(
-                    status_code=400,
-                    content={
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32601, "message": f"Method not found: {method}"}
-                    }
-                )
-            
-            return JSONResponse(
-                content={
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "result": result
-                }
-            )
-        except Exception as e:
-            logger.error(f"Error handling {method}: {e}", exc_info=True)
-            return JSONResponse(
-                status_code=500,
-                content={
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {"code": -32603, "message": str(e)}
-                }
-            )
-    
-    @app.get("/health")
-    async def health():
-        return {"status": "ok"}
-    
-    logger.info(f"Starting HTTP server on port {port}")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
+    logger.info(f"Starting FastMCP Skills Provider with sse transport")
+    logger.info(f"Port: {port}")
+    logger.info(f"Endpoint: http://localhost:{port}/sse")
+    logger.info(f"Tools configured:")
+    logger.info(f"  - list_skills: List all available skills")
+    logger.info(f"  - get_skill: Get skill content by name")
+    logger.info(f"  - list_skill_files: List all files in a skill")
+    logger.info(
+        f"Register with gateway: transport=streamable-http, url=http://localhost:{port}/mcp"
+    )
 
-async def handle_resources_list(server_instance: SkillsProviderServer) -> dict:
-    """Handle resources/list MCP method"""
-    resources = []
-    
-    # Get resources from the MCP server
-    try:
-        # Access the provider to get resources
-        for provider in server_instance.mcp._providers:
-            if hasattr(provider, 'list_resources'):
-                provider_resources = await provider.list_resources() if asyncio.iscoroutinefunction(provider.list_resources) else provider.list_resources()
-                if hasattr(provider_resources, '__aiter__'):
-                    async for resource in provider_resources:
-                        resources.append({
-                            "uri": resource.uri,
-                            "name": resource.name,
-                            "description": resource.description or "",
-                            "mimeType": resource.mimeType or "text/plain"
-                        })
-                elif hasattr(provider_resources, '__iter__'):
-                    for resource in provider_resources:
-                        resources.append({
-                            "uri": resource.uri,
-                            "name": resource.name,
-                            "description": resource.description or "",
-                            "mimeType": resource.mimeType or "text/plain"
-                        })
-    except Exception as e:
-        logger.debug(f"Error listing resources: {e}")
-    
-    return {"resources": resources}
+    # Start heartbeat thread to keep server visible to gateway
+    config_loader = ConfigLoader(config_file)
+    gateway_config = config_loader.get_gateway_config()
+    if gateway_config.enabled:
+        gateway_host = gateway_config.host or "localhost"
+        gateway_port = gateway_config.port or 8000
+        server_name = gateway_config.name or "skills-provider"
 
+        def heartbeat_loop():
+            """Send periodic heartbeats to the gateway"""
+            gateway_url = f"http://{gateway_host}:{gateway_port}/heartbeat"
+            while True:
+                try:
+                    # Send heartbeat every 15 seconds (well under 30 second timeout)
+                    response = httpx.get(
+                        gateway_url, params={"server_name": server_name}, timeout=5.0
+                    )
+                    if response.status_code == 200:
+                        logger.debug(f"Heartbeat sent to gateway ({server_name})")
+                    else:
+                        logger.warning(
+                            f"Gateway heartbeat failed: {response.status_code}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Heartbeat error: {e}")
+                finally:
+                    time.sleep(15)  # Send heartbeat every 15 seconds
 
-async def handle_resources_read(server_instance: SkillsProviderServer, params: dict) -> dict:
-    """Handle resources/read MCP method"""
-    uri = params.get("uri", "")
-    
-    try:
-        # Access the provider to read resource
-        for provider in server_instance.mcp._providers:
-            if hasattr(provider, 'read_resource'):
-                content = await provider.read_resource(uri) if asyncio.iscoroutinefunction(provider.read_resource) else provider.read_resource(uri)
-                return {
-                    "contents": [
-                        {
-                            "uri": uri,
-                            "mimeType": "text/plain",
-                            "text": content if isinstance(content, str) else str(content)
-                        }
-                    ]
-                }
-    except Exception as e:
-        logger.error(f"Error reading resource {uri}: {e}")
-        return {"error": {"code": -32603, "message": str(e)}}
-    
-    return {"error": {"code": -32602, "message": f"Resource not found: {uri}"}}
+        # Start heartbeat thread as daemon so it doesn't block server shutdown
+        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+        logger.info(
+            f"Heartbeat thread started (gateway: {gateway_host}:{gateway_port}, server: {server_name})"
+        )
 
+    # Use streamable-http transport which is compatible with MCP gateways
+    server_instance.mcp.run(transport="streamable-http", host="0.0.0.0", port=port)
 
 
 def main():
-    """Main entry point"""
     import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='FastMCP Skills Provider Server',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
-Examples:
-  # Run with default stdio transport (for Cursor/Claude)
-  python main.py
-  
-  # Run with HTTP transport (for MCP gateway)
-  python main.py --http --port 3000
-  
-  # Run with custom configuration file
-  python main.py --config /path/to/config.json
-  
-  # Create a default configuration file
-  python main.py --init
-        '''
-    )
-    parser.add_argument(
-        '--config',
-        default='skills.settings.json',
-        help='Path to configuration file (default: skills.settings.json)'
-    )
-    parser.add_argument(
-        '--init',
-        action='store_true',
-        help='Create a default configuration file and exit'
-    )
-    parser.add_argument(
-        '--http',
-        action='store_true',
-        help='Run with HTTP transport instead of stdio (for MCP gateway)'
-    )
-    parser.add_argument(
-        '--port',
-        type=int,
-        default=3000,
-        help='HTTP port (default: 3000)'
-    )
-    
+
+    parser = argparse.ArgumentParser(description="FastMCP Skills Provider Server")
+    parser.add_argument("--config", default="skills.settings.json")
+    parser.add_argument("--init", action="store_true")
+    parser.add_argument("--http", action="store_true")
+    parser.add_argument("--port", type=int, default=None)
     args = parser.parse_args()
-    
+
     if args.init:
         ConfigLoader.create_default_config(args.config)
         sys.exit(0)
-    
+
     try:
-        if args.http:
-            # Run HTTP server
-            run_http_server(args.config, args.port)
+        config_loader = ConfigLoader(args.config)
+        use_http = args.http
+        if not use_http and config_loader.get_gateway_config().enabled:
+            logger.info("Gateway enabled in config - switching to HTTP transport")
+            use_http = True
+
+        # Use provided port or fall back to config port
+        http_port = args.port or config_loader.get_http_config().port
+
+        if use_http:
+            run_http_server(args.config, http_port)
         else:
-            # Run stdio server
             server = SkillsProviderServer(args.config)
             server.run()
     except FileNotFoundError as e:
         logger.error(f"Error: {e}")
-        logger.info("Hint: Run 'python main.py --init' to create a default configuration")
-        sys.exit(1)
-    except ValueError as e:
-        logger.error(f"Configuration error: {e}")
         sys.exit(1)
 
 
